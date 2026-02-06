@@ -1,6 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Kazagumo, Plugins } = require('kazagumo');
 const { Connectors } = require('shoukaku');
-const { Kazagumo } = require('kazagumo');
 const express = require('express');
 require('dotenv').config();
 
@@ -17,7 +17,7 @@ const BOT_INFO = {
     color: '#5865F2'
 };
 
-// ============ EXPRESS SERVER (RAILWAY COMPATIBLE) ============
+// ============ EXPRESS SERVER ============
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -36,7 +36,7 @@ const client = new Client({
     ]
 });
 
-// ============ LAVALINK NODES ============
+// ============ LAVALINK v4 NODES (FORMAT BARU!) ============
 const Nodes = [
     {
         name: 'Main',
@@ -46,31 +46,40 @@ const Nodes = [
     }
 ];
 
-// ============ KAZAGUMO SETUP ============
+// ============ KAZAGUMO v3 SETUP (SYNTAX BARU!) ============
 const kazagumo = new Kazagumo(
     {
+        // Kazagumo Options
         defaultSearchEngine: 'youtube',
-        send: (guildId, payload) => {
-            const guild = client.guilds.cache.get(guildId);
-            if (guild) guild.shard.send(payload);
-        }
+        
+        // Shoukaku Options (SEKARANG DI DALAM!)
+        shoukakuOptions: {
+            moveOnDisconnect: false,
+            resumable: false,
+            resumableTimeout: 30,
+            reconnectTries: 3,
+            restTimeout: 60000
+        },
+        
+        // Plugins (opsional)
+        plugins: [
+            new Plugins.PlayerMoved(client)
+        ]
     },
     new Connectors.DiscordJS(client),
-    Nodes,
-    { moveOnDisconnect: false, resumable: false, reconnectTries: 3, restTimeout: 15000 }
+    Nodes
 );
 
 // ============ LAVALINK EVENTS ============
 kazagumo.shoukaku.on('ready', (name) => console.log(`✅ Lavalink ${name} connected!`));
-kazagumo.shoukaku.on('error', (name, error) => console.error(`❌ Lavalink ${name} error:`, error.message));
+kazagumo.shoukaku.on('error', (name, error) => console.error(`❌ Lavalink ${name} error:`, error));
 kazagumo.shoukaku.on('close', (name, code, reason) => console.warn(`⚠️ Lavalink ${name} closed: ${code} - ${reason}`));
-kazagumo.shoukaku.on('disconnect', (name) => console.warn(`🔌 Lavalink ${name} disconnected`));
+kazagumo.shoukaku.on('disconnect', (name, reason) => console.warn(`🔌 Lavalink ${name} disconnected: ${reason}`));
 
-// ============ PLAYER EVENTS - WITH 2 MINUTE TIMER ============
+// ============ PLAYER EVENTS ============
 const disconnectTimers = new Map();
 
 kazagumo.on('playerStart', (player, track) => {
-    // Clear disconnect timer jika ada
     if (disconnectTimers.has(player.guildId)) {
         clearTimeout(disconnectTimers.get(player.guildId));
         disconnectTimers.delete(player.guildId);
@@ -106,7 +115,6 @@ kazagumo.on('playerEmpty', (player) => {
         channel.send({ embeds: [embed] });
     }
     
-    // Set 2 minute timer (bukan langsung destroy!)
     const timer = setTimeout(() => {
         if (player && !player.queue.current && player.queue.length === 0) {
             if (channel) {
@@ -119,25 +127,23 @@ kazagumo.on('playerEmpty', (player) => {
             player.destroy();
         }
         disconnectTimers.delete(player.guildId);
-    }, 120000); // 2 menit
+    }, 120000);
     
     disconnectTimers.set(player.guildId, timer);
 });
 
-kazagumo.on('playerError', (player, error) => {
-    console.error('Player error:', error);
+kazagumo.on('playerException', (player, data) => {
+    console.error('Player exception:', data);
     const channel = client.channels.cache.get(player.textId);
     if (channel) {
-        channel.send({ embeds: [errorEmbed('Failed to play track. Skipping...')] });
+        channel.send({ embeds: [errorEmbed('Track failed to play. Skipping...')] });
     }
-    // Auto skip jika ada lagu berikutnya
     if (player.queue.length > 0) {
         setTimeout(() => player.skip(), 1000);
     }
 });
 
 kazagumo.on('playerDestroy', (player) => {
-    // Clear timer saat player destroyed
     if (disconnectTimers.has(player.guildId)) {
         clearTimeout(disconnectTimers.get(player.guildId));
         disconnectTimers.delete(player.guildId);
@@ -205,8 +211,7 @@ client.on('messageCreate', async (message) => {
                     textId: message.channel.id,
                     voiceId: message.member.voice.channel.id,
                     volume: 70,
-                    deaf: true,
-                    shardId: message.guild.shardId
+                    deaf: true
                 });
             }
 
@@ -398,9 +403,9 @@ client.on('messageCreate', async (message) => {
         const player = kazagumo.players.get(message.guild.id);
         if (!player) return message.reply({ embeds: [errorEmbed('Nothing is playing!')] });
 
-        const isEnabled = player.rotation?.rotationHz;
+        const isEnabled = player.filters.rotation;
         if (isEnabled) {
-            player.setRotation({ rotationHz: 0 });
+            player.setRotation();
             message.channel.send({ embeds: [successEmbed('🎧 8D Audio: **Off**')] });
         } else {
             player.setRotation({ rotationHz: 0.2 });
