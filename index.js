@@ -1,13 +1,13 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const { Kazagumo } = require('kazagumo');
 const { Connectors } = require('shoukaku');
+const { Kazagumo } = require('kazagumo');
 const express = require('express');
 require('dotenv').config();
 
 // ============ BOT INFO ============
 const BOT_INFO = {
     name: 'Melodify',
-    version: '1.0.1',
+    version: '1.0.0',
     description: 'High quality Discord music bot.',
     owner: {
         id: '1307489983359357019',
@@ -17,9 +17,9 @@ const BOT_INFO = {
     color: '#5865F2'
 };
 
-// ============ EXPRESS SERVER ============
+// ============ EXPRESS SERVER (RAILWAY COMPATIBLE) ============
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => res.status(200).send('Bot is running'));
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok', uptime: process.uptime() }));
@@ -36,7 +36,7 @@ const client = new Client({
     ]
 });
 
-// ============ LAVALINK v4 NODES ============
+// ============ LAVALINK NODES ============
 const Nodes = [
     {
         name: 'Main',
@@ -46,39 +46,31 @@ const Nodes = [
     }
 ];
 
-// ============ KAZAGUMO v3 SETUP ============
+// ============ KAZAGUMO SETUP ============
 const kazagumo = new Kazagumo(
     {
         defaultSearchEngine: 'youtube',
-        
-        // CRITICAL: Send function untuk komunikasi dengan Discord Gateway
         send: (guildId, payload) => {
             const guild = client.guilds.cache.get(guildId);
             if (guild) guild.shard.send(payload);
-        },
-        
-        shoukakuOptions: {
-            moveOnDisconnect: false,
-            resumable: false,
-            resumableTimeout: 30,
-            reconnectTries: 3,
-            restTimeout: 60000
         }
     },
     new Connectors.DiscordJS(client),
-    Nodes
+    Nodes,
+    { moveOnDisconnect: false, resumable: false, reconnectTries: 3, restTimeout: 15000 }
 );
 
 // ============ LAVALINK EVENTS ============
 kazagumo.shoukaku.on('ready', (name) => console.log(`✅ Lavalink ${name} connected!`));
-kazagumo.shoukaku.on('error', (name, error) => console.error(`❌ Lavalink ${name} error:`, error));
+kazagumo.shoukaku.on('error', (name, error) => console.error(`❌ Lavalink ${name} error:`, error.message));
 kazagumo.shoukaku.on('close', (name, code, reason) => console.warn(`⚠️ Lavalink ${name} closed: ${code} - ${reason}`));
-kazagumo.shoukaku.on('disconnect', (name, reason) => console.warn(`🔌 Lavalink ${name} disconnected: ${reason}`));
+kazagumo.shoukaku.on('disconnect', (name) => console.warn(`🔌 Lavalink ${name} disconnected`));
 
-// ============ PLAYER EVENTS ============
+// ============ PLAYER EVENTS - WITH 2 MINUTE TIMER ============
 const disconnectTimers = new Map();
 
 kazagumo.on('playerStart', (player, track) => {
+    // Clear disconnect timer jika ada
     if (disconnectTimers.has(player.guildId)) {
         clearTimeout(disconnectTimers.get(player.guildId));
         disconnectTimers.delete(player.guildId);
@@ -101,7 +93,7 @@ kazagumo.on('playerStart', (player, track) => {
         .setFooter({ text: `Volume: ${player.volume}%  •  ${BOT_INFO.name} v${BOT_INFO.version}` })
         .setTimestamp();
 
-    channel.send({ embeds: [embed] }).catch(console.error);
+    channel.send({ embeds: [embed] });
 });
 
 kazagumo.on('playerEmpty', (player) => {
@@ -111,9 +103,10 @@ kazagumo.on('playerEmpty', (player) => {
             .setColor('#FFA500')
             .setDescription('⏸️ Queue finished. Add more songs with `!play`\n*Leaving in 2 minutes if no songs added.*')
             .setTimestamp();
-        channel.send({ embeds: [embed] }).catch(console.error);
+        channel.send({ embeds: [embed] });
     }
     
+    // Set 2 minute timer (bukan langsung destroy!)
     const timer = setTimeout(() => {
         if (player && !player.queue.current && player.queue.length === 0) {
             if (channel) {
@@ -121,28 +114,30 @@ kazagumo.on('playerEmpty', (player) => {
                     .setColor('#ff6b6b')
                     .setDescription('⏹️ Left due to inactivity.')
                     .setTimestamp();
-                channel.send({ embeds: [embed] }).catch(console.error);
+                channel.send({ embeds: [embed] });
             }
             player.destroy();
         }
         disconnectTimers.delete(player.guildId);
-    }, 120000);
+    }, 120000); // 2 menit
     
     disconnectTimers.set(player.guildId, timer);
 });
 
-kazagumo.on('playerException', (player, data) => {
-    console.error('Player exception:', data);
+kazagumo.on('playerError', (player, error) => {
+    console.error('Player error:', error);
     const channel = client.channels.cache.get(player.textId);
     if (channel) {
-        channel.send({ embeds: [errorEmbed('Track failed to play. Skipping...')] }).catch(console.error);
+        channel.send({ embeds: [errorEmbed('Failed to play track. Skipping...')] });
     }
+    // Auto skip jika ada lagu berikutnya
     if (player.queue.length > 0) {
         setTimeout(() => player.skip(), 1000);
     }
 });
 
 kazagumo.on('playerDestroy', (player) => {
+    // Clear timer saat player destroyed
     if (disconnectTimers.has(player.guildId)) {
         clearTimeout(disconnectTimers.get(player.guildId));
         disconnectTimers.delete(player.guildId);
@@ -210,7 +205,8 @@ client.on('messageCreate', async (message) => {
                     textId: message.channel.id,
                     voiceId: message.member.voice.channel.id,
                     volume: 70,
-                    deaf: true
+                    deaf: true,
+                    shardId: message.guild.shardId
                 });
             }
 
@@ -252,7 +248,7 @@ client.on('messageCreate', async (message) => {
         if (!player?.queue.current) return message.reply({ embeds: [errorEmbed('Nothing to skip!')] });
 
         player.skip();
-        message.react('⏭️').catch(console.error);
+        message.react('⏭️');
     }
 
     // ==================== STOP ====================
@@ -260,13 +256,8 @@ client.on('messageCreate', async (message) => {
         const player = kazagumo.players.get(message.guild.id);
         if (!player) return message.reply({ embeds: [errorEmbed('Nothing is playing!')] });
 
-        try {
-            player.destroy();
-            message.react('⏹️').catch(console.error);
-        } catch (error) {
-            console.error('Stop error:', error);
-            message.reply({ embeds: [errorEmbed('Failed to stop player.')] });
-        }
+        player.destroy();
+        message.react('⏹️');
     }
 
     // ==================== PAUSE ====================
@@ -275,7 +266,7 @@ client.on('messageCreate', async (message) => {
         if (!player) return message.reply({ embeds: [errorEmbed('Nothing is playing!')] });
 
         player.pause(true);
-        message.react('⏸️').catch(console.error);
+        message.react('⏸️');
     }
 
     // ==================== RESUME ====================
@@ -284,7 +275,7 @@ client.on('messageCreate', async (message) => {
         if (!player) return message.reply({ embeds: [errorEmbed('Nothing is playing!')] });
 
         player.pause(false);
-        message.react('▶️').catch(console.error);
+        message.react('▶️');
     }
 
     // ==================== QUEUE ====================
@@ -407,9 +398,9 @@ client.on('messageCreate', async (message) => {
         const player = kazagumo.players.get(message.guild.id);
         if (!player) return message.reply({ embeds: [errorEmbed('Nothing is playing!')] });
 
-        const isEnabled = player.filters?.rotation;
+        const isEnabled = player.rotation?.rotationHz;
         if (isEnabled) {
-            player.setRotation();
+            player.setRotation({ rotationHz: 0 });
             message.channel.send({ embeds: [successEmbed('🎧 8D Audio: **Off**')] });
         } else {
             player.setRotation({ rotationHz: 0.2 });
@@ -487,8 +478,8 @@ client.on('messageCreate', async (message) => {
 });
 
 // ============ ERROR HANDLERS ============
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection:', reason);
 });
 
 process.on('uncaughtException', (error) => {
