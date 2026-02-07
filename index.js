@@ -17,7 +17,7 @@ const BOT_INFO = {
     color: '#5865F2'
 };
 
-// ============ EXPRESS SERVER (RAILWAY COMPATIBLE) ============
+// ============ EXPRESS SERVER ============
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -36,7 +36,7 @@ const client = new Client({
     ]
 });
 
-// ============ LAVALINK NODES ============
+// ============ LAVALINK NODES - YOUR RENDER SERVER ============
 const Nodes = [
     {
         name: 'Render',
@@ -57,7 +57,12 @@ const kazagumo = new Kazagumo(
     },
     new Connectors.DiscordJS(client),
     Nodes,
-    { moveOnDisconnect: false, resumable: false, reconnectTries: 3, restTimeout: 15000 }
+    { 
+        moveOnDisconnect: false, 
+        resumable: false, 
+        reconnectTries: 3, 
+        restTimeout: 15000 
+    }
 );
 
 // ============ LAVALINK EVENTS ============
@@ -66,11 +71,11 @@ kazagumo.shoukaku.on('error', (name, error) => console.error(`❌ Lavalink ${nam
 kazagumo.shoukaku.on('close', (name, code, reason) => console.warn(`⚠️ Lavalink ${name} closed: ${code} - ${reason}`));
 kazagumo.shoukaku.on('disconnect', (name) => console.warn(`🔌 Lavalink ${name} disconnected`));
 
-// ============ PLAYER EVENTS - WITH 2 MINUTE TIMER ============
+// ============ PLAYER EVENTS ============
 const disconnectTimers = new Map();
 
 kazagumo.on('playerStart', (player, track) => {
-    // Clear disconnect timer jika ada
+    // Clear disconnect timer
     if (disconnectTimers.has(player.guildId)) {
         clearTimeout(disconnectTimers.get(player.guildId));
         disconnectTimers.delete(player.guildId);
@@ -106,7 +111,7 @@ kazagumo.on('playerEmpty', (player) => {
         channel.send({ embeds: [embed] });
     }
     
-    // Set 2 minute timer (bukan langsung destroy!)
+    // Set 2 minute timer
     const timer = setTimeout(() => {
         if (player && !player.queue.current && player.queue.length === 0) {
             if (channel) {
@@ -119,25 +124,25 @@ kazagumo.on('playerEmpty', (player) => {
             player.destroy();
         }
         disconnectTimers.delete(player.guildId);
-    }, 120000); // 2 menit
+    }, 120000);
     
     disconnectTimers.set(player.guildId, timer);
 });
 
-kazagumo.on('playerError', (player, error) => {
+// ============ IMPORTANT: Handle track errors ============
+kazagumo.on('playerError', (player, error, track) => {
     console.error('Player error:', error);
     const channel = client.channels.cache.get(player.textId);
     if (channel) {
-        channel.send({ embeds: [errorEmbed('Failed to play track. Skipping...')] });
+        channel.send({ embeds: [errorEmbed(`Failed to play: ${track?.title || 'Unknown track'}\nSkipping...`)] });
     }
-    // Auto skip jika ada lagu berikutnya
+    // Auto skip
     if (player.queue.length > 0) {
         setTimeout(() => player.skip(), 1000);
     }
 });
 
 kazagumo.on('playerDestroy', (player) => {
-    // Clear timer saat player destroyed
     if (disconnectTimers.has(player.guildId)) {
         clearTimeout(disconnectTimers.get(player.guildId));
         disconnectTimers.delete(player.guildId);
@@ -154,8 +159,6 @@ client.once('ready', () => {
     
     client.user.setActivity('!help • Music Bot', { type: 2 });
 });
-
-client.on('error', (error) => console.error('Client error:', error));
 
 // ============ HELPER FUNCTIONS ============
 function formatDuration(ms) {
@@ -174,6 +177,23 @@ function successEmbed(message) {
     return new EmbedBuilder().setColor(BOT_INFO.color).setDescription(message);
 }
 
+// ============ IMPORTANT: Check if query is URL ============
+function isURL(string) {
+    const urlPatterns = [
+        /^https?:\/\//i,
+        /^(www\.)?youtube\.com/i,
+        /^youtu\.be\//i,
+        /^music\.youtube\.com/i,
+        /^(www\.)?spotify\.com/i,
+        /^open\.spotify\.com/i,
+        /^(www\.)?soundcloud\.com/i,
+        /^(www\.)?bandcamp\.com/i,
+        /^(www\.)?twitch\.tv/i,
+        /^(www\.)?vimeo\.com/i
+    ];
+    return urlPatterns.some(pattern => pattern.test(string));
+}
+
 // ============ MESSAGE COMMANDS ============
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
@@ -185,7 +205,7 @@ client.on('messageCreate', async (message) => {
     const validCommands = ['play', 'p', 'skip', 's', 'stop', 'pause', 'resume', 'queue', 'q', 'nowplaying', 'np', 'loop', 'volume', 'vol', 'seek', '8d', 'help', 'info', 'ping'];
     if (!validCommands.includes(command)) return;
 
-    // ==================== PLAY ====================
+    // ==================== PLAY - FIXED ====================
     if (command === 'play' || command === 'p') {
         if (!message.member.voice.channel) {
             return message.reply({ embeds: [errorEmbed('Join a voice channel first!')] });
@@ -210,10 +230,30 @@ client.on('messageCreate', async (message) => {
                 });
             }
 
-            const result = await kazagumo.search(query, { requester: message.author });
+            // ============ CRITICAL FIX: Properly handle URL vs Search ============
+            let searchQuery;
+            
+            if (isURL(query)) {
+                // If it's a URL, use it directly WITHOUT prefix
+                searchQuery = query;
+                console.log(`[PLAY] Loading URL: ${searchQuery}`);
+            } else if (query.startsWith('ytsearch:') || query.startsWith('scsearch:') || query.startsWith('spsearch:')) {
+                // If already has search prefix, use as-is
+                searchQuery = query;
+                console.log(`[PLAY] Using prefixed search: ${searchQuery}`);
+            } else {
+                // Regular search - add ytsearch: prefix
+                searchQuery = `ytsearch:${query}`;
+                console.log(`[PLAY] Searching: ${searchQuery}`);
+            }
 
-            if (!result || !result.tracks.length) {
-                return message.reply({ embeds: [errorEmbed('No results found!')] });
+            // Search/Load track
+            const result = await kazagumo.search(searchQuery, { requester: message.author });
+
+            console.log(`[PLAY] Result type: ${result?.type}, Tracks: ${result?.tracks?.length || 0}`);
+
+            if (!result || !result.tracks || result.tracks.length === 0) {
+                return message.reply({ embeds: [errorEmbed('No results found! Try:\n• Different keywords\n• Full YouTube URL\n• Check if video is available')] });
             }
 
             if (result.type === 'PLAYLIST') {
@@ -225,20 +265,27 @@ client.on('messageCreate', async (message) => {
                     .setDescription(`📃 Added **${result.tracks.length}** tracks from **${result.playlistName}**`);
                 message.channel.send({ embeds: [embed] });
             } else {
-                player.queue.add(result.tracks[0]);
+                const track = result.tracks[0];
+                player.queue.add(track);
+                
                 if (player.playing || player.paused) {
                     const embed = new EmbedBuilder()
                         .setColor(BOT_INFO.color)
-                        .setDescription(`➕ Added to queue: **${result.tracks[0].title}**`);
+                        .setDescription(`➕ Added to queue: **${track.title}**`)
+                        .setFooter({ text: `Duration: ${formatDuration(track.length)} • By: ${track.author}` });
                     message.channel.send({ embeds: [embed] });
                 }
             }
 
-            if (!player.playing && !player.paused) player.play();
+            // ============ CRITICAL FIX: Ensure player starts ============
+            if (!player.playing && !player.paused) {
+                console.log('[PLAY] Starting playback...');
+                await player.play();
+            }
 
         } catch (error) {
-            console.error('Play error:', error);
-            message.reply({ embeds: [errorEmbed('An error occurred! Please try again.')] });
+            console.error('[PLAY] Error:', error);
+            message.reply({ embeds: [errorEmbed(`Error: ${error.message || 'Failed to play track'}`)] });
         }
     }
 
@@ -398,12 +445,14 @@ client.on('messageCreate', async (message) => {
         const player = kazagumo.players.get(message.guild.id);
         if (!player) return message.reply({ embeds: [errorEmbed('Nothing is playing!')] });
 
-        const isEnabled = player.rotation?.rotationHz;
+        const isEnabled = player.data.get('8d');
         if (isEnabled) {
-            player.setRotation({ rotationHz: 0 });
+            await player.setRotation();
+            player.data.set('8d', false);
             message.channel.send({ embeds: [successEmbed('🎧 8D Audio: **Off**')] });
         } else {
-            player.setRotation({ rotationHz: 0.2 });
+            await player.setRotation({ rotationHz: 0.2 });
+            player.data.set('8d', true);
             message.channel.send({ embeds: [successEmbed('🎧 8D Audio: **On** (Use headphones!)')] });
         }
     }
@@ -469,9 +518,11 @@ client.on('messageCreate', async (message) => {
     // ==================== PING ====================
     if (command === 'ping') {
         const latency = Date.now() - message.createdTimestamp;
+        const node = kazagumo.shoukaku.nodes.get('Render');
+        
         const embed = new EmbedBuilder()
             .setColor(BOT_INFO.color)
-            .setDescription(`🏓 **Pong!**\n📡 Latency: \`${latency}ms\`\n💓 API: \`${Math.round(client.ws.ping)}ms\``);
+            .setDescription(`🏓 **Pong!**\n📡 Bot Latency: \`${latency}ms\`\n💓 API: \`${Math.round(client.ws.ping)}ms\`\n🎵 Lavalink: \`${node?.stats?.ping || 'N/A'}ms\``);
 
         message.channel.send({ embeds: [embed] });
     }
