@@ -39,9 +39,9 @@ const client = new Client({
 // ============ LAVALINK NODES - YOUR RENDER SERVER ============
 const Nodes = [
     {
-        name: 'Render',
-        url: 'lavalink-sf9r.onrender.com:443',
-        auth: 'your_super_strong_password_here',
+        name: 'Serenetia',
+        url: 'lavalinkv4.serenetia.com:443',
+        auth: 'https://dsc.gg/ajidevserver',
         secure: true
     }
 ];
