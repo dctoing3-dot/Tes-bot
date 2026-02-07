@@ -6,8 +6,8 @@ require('dotenv').config();
 
 // ============ BOT INFO ============
 const BOT_INFO = {
-    name: 'Melodify',
-    version: '1.0.0',
+    name: 'Demisz',
+    version: '1.1.0',
     description: 'High quality Discord music bot.',
     owner: {
         id: '1307489983359357019',
@@ -36,7 +36,7 @@ const client = new Client({
     ]
 });
 
-// ============ LAVALINK NODES - YOUR RENDER SERVER ============
+// ============ LAVALINK NODES ============
 const Nodes = [
     {
         name: 'Serenetia',
@@ -57,11 +57,11 @@ const kazagumo = new Kazagumo(
     },
     new Connectors.DiscordJS(client),
     Nodes,
-    { 
-        moveOnDisconnect: false, 
-        resumable: false, 
-        reconnectTries: 3, 
-        restTimeout: 15000 
+    {
+        moveOnDisconnect: false,
+        resumable: false,
+        reconnectTries: 3,
+        restTimeout: 15000
     }
 );
 
@@ -75,7 +75,6 @@ kazagumo.shoukaku.on('disconnect', (name) => console.warn(`🔌 Lavalink ${name}
 const disconnectTimers = new Map();
 
 kazagumo.on('playerStart', (player, track) => {
-    // Clear disconnect timer
     if (disconnectTimers.has(player.guildId)) {
         clearTimeout(disconnectTimers.get(player.guildId));
         disconnectTimers.delete(player.guildId);
@@ -110,8 +109,7 @@ kazagumo.on('playerEmpty', (player) => {
             .setTimestamp();
         channel.send({ embeds: [embed] });
     }
-    
-    // Set 2 minute timer
+
     const timer = setTimeout(() => {
         if (player && !player.queue.current && player.queue.length === 0) {
             if (channel) {
@@ -125,18 +123,16 @@ kazagumo.on('playerEmpty', (player) => {
         }
         disconnectTimers.delete(player.guildId);
     }, 120000);
-    
+
     disconnectTimers.set(player.guildId, timer);
 });
 
-// ============ IMPORTANT: Handle track errors ============
 kazagumo.on('playerError', (player, error, track) => {
     console.error('Player error:', error);
     const channel = client.channels.cache.get(player.textId);
     if (channel) {
         channel.send({ embeds: [errorEmbed(`Failed to play: ${track?.title || 'Unknown track'}\nSkipping...`)] });
     }
-    // Auto skip
     if (player.queue.length > 0) {
         setTimeout(() => player.skip(), 1000);
     }
@@ -156,7 +152,7 @@ client.once('ready', () => {
     console.log(`📊 Serving ${client.guilds.cache.size} servers`);
     console.log(`👥 ${client.users.cache.size} users`);
     console.log('═══════════════════════════════════════');
-    
+
     client.user.setActivity('!help • Music Bot', { type: 2 });
 });
 
@@ -177,7 +173,6 @@ function successEmbed(message) {
     return new EmbedBuilder().setColor(BOT_INFO.color).setDescription(message);
 }
 
-// ============ IMPORTANT: Check if query is URL ============
 function isURL(string) {
     const urlPatterns = [
         /^https?:\/\//i,
@@ -194,6 +189,141 @@ function isURL(string) {
     return urlPatterns.some(pattern => pattern.test(string));
 }
 
+// ============ BULK ADD HELPER FUNCTION ============
+// Fungsi utama untuk menambahkan banyak lagu sekaligus
+async function addMultipleTracks(kazagumo, player, queries, requester, channel) {
+    let added = 0;
+    let failed = 0;
+    const failedTracks = [];
+    const addedTracks = [];
+
+    // Kirim status awal
+    const statusMsg = await channel.send({
+        embeds: [
+            new EmbedBuilder()
+                .setColor('#FFA500')
+                .setDescription(`⏳ Processing **${queries.length}** songs... Please wait.`)
+        ]
+    });
+
+    for (let i = 0; i < queries.length; i++) {
+        const query = queries[i].trim();
+        if (!query || query.length === 0) continue;
+
+        try {
+            let searchQuery;
+            if (isURL(query)) {
+                searchQuery = query;
+            } else if (query.startsWith('ytsearch:') || query.startsWith('scsearch:') || query.startsWith('spsearch:')) {
+                searchQuery = query;
+            } else {
+                searchQuery = `ytsearch:${query}`;
+            }
+
+            const result = await kazagumo.search(searchQuery, { requester });
+
+            if (!result || !result.tracks || result.tracks.length === 0) {
+                failed++;
+                failedTracks.push(query);
+                continue;
+            }
+
+            if (result.type === 'PLAYLIST') {
+                // Jika salah satu query adalah playlist, tambahkan semua
+                for (const track of result.tracks) {
+                    player.queue.add(track);
+                    added++;
+                }
+                addedTracks.push(`📃 ${result.playlistName} (${result.tracks.length} tracks)`);
+            } else {
+                const track = result.tracks[0];
+                player.queue.add(track);
+                added++;
+                addedTracks.push(`🎵 ${track.title}`);
+            }
+
+            // Update status setiap 5 lagu
+            if ((i + 1) % 5 === 0 || i === queries.length - 1) {
+                await statusMsg.edit({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor('#FFA500')
+                            .setDescription(
+                                `⏳ Processing... **${i + 1}/${queries.length}**\n` +
+                                `✅ Added: **${added}** | ❌ Failed: **${failed}**`
+                            )
+                    ]
+                }).catch(() => {});
+            }
+
+            // Delay kecil supaya tidak rate limit
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+        } catch (error) {
+            console.error(`[MULTI] Error loading "${query}":`, error.message);
+            failed++;
+            failedTracks.push(query);
+        }
+    }
+
+    // ============ RESULT EMBED ============
+    let description = `✅ Successfully added **${added}** tracks to queue!\n`;
+    if (failed > 0) {
+        description += `❌ Failed: **${failed}** tracks\n`;
+    }
+
+    // Tampilkan daftar lagu yang ditambahkan (max 15)
+    if (addedTracks.length > 0) {
+        description += `\n**Added:**\n`;
+        addedTracks.slice(0, 15).forEach((t, i) => {
+            description += `\`${i + 1}.\` ${t}\n`;
+        });
+        if (addedTracks.length > 15) {
+            description += `*...and ${addedTracks.length - 15} more*\n`;
+        }
+    }
+
+    // Tampilkan lagu yang gagal
+    if (failedTracks.length > 0) {
+        description += `\n**Failed:**\n`;
+        failedTracks.slice(0, 5).forEach(t => {
+            description += `• ${t}\n`;
+        });
+        if (failedTracks.length > 5) {
+            description += `*...and ${failedTracks.length - 5} more*\n`;
+        }
+    }
+
+    const resultEmbed = new EmbedBuilder()
+        .setColor(failed === 0 ? BOT_INFO.color : '#FFA500')
+        .setAuthor({ name: 'Bulk Queue Add', iconURL: client.user.displayAvatarURL() })
+        .setDescription(description)
+        .setFooter({ text: `Total in queue: ${player.queue.length} tracks` })
+        .setTimestamp();
+
+    await statusMsg.edit({ embeds: [resultEmbed] });
+
+    return { added, failed };
+}
+
+// ============ GET OR CREATE PLAYER ============
+async function getOrCreatePlayer(kazagumo, message) {
+    let player = kazagumo.players.get(message.guild.id);
+
+    if (!player) {
+        player = await kazagumo.createPlayer({
+            guildId: message.guild.id,
+            textId: message.channel.id,
+            voiceId: message.member.voice.channel.id,
+            volume: 70,
+            deaf: true,
+            shardId: message.guild.shardId
+        });
+    }
+
+    return player;
+}
+
 // ============ MESSAGE COMMANDS ============
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
@@ -202,10 +332,32 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(1).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    const validCommands = ['play', 'p', 'skip', 's', 'stop', 'pause', 'resume', 'queue', 'q', 'nowplaying', 'np', 'loop', 'volume', 'vol', 'seek', '8d', 'help', 'info', 'ping'];
+    const validCommands = [
+        'play', 'p',
+        'playmulti', 'pm',       // BARU: tambah banyak lagu dengan pemisah |
+        'playfile', 'pf',        // BARU: tambah lagu dari file .txt
+        'playlist', 'pl',        // BARU: shortcut playlist URL
+        'skip', 's',
+        'stop',
+        'pause',
+        'resume',
+        'queue', 'q',
+        'nowplaying', 'np',
+        'loop',
+        'volume', 'vol',
+        'seek',
+        '8d',
+        'remove', 'rm',          // BARU: hapus track dari queue
+        'clear',                 // BARU: clear seluruh queue
+        'shuffle',               // BARU: shuffle queue
+        'help',
+        'info',
+        'ping'
+    ];
+
     if (!validCommands.includes(command)) return;
 
-    // ==================== PLAY - FIXED ====================
+    // ==================== PLAY (SINGLE) ====================
     if (command === 'play' || command === 'p') {
         if (!message.member.voice.channel) {
             return message.reply({ embeds: [errorEmbed('Join a voice channel first!')] });
@@ -213,47 +365,39 @@ client.on('messageCreate', async (message) => {
 
         const query = args.join(' ');
         if (!query) {
-            return message.reply({ embeds: [errorEmbed('Please provide a song name or URL!\n`!play <song name/url>`')] });
+            return message.reply({
+                embeds: [errorEmbed(
+                    'Please provide a song name or URL!\n\n' +
+                    '**Usage:**\n' +
+                    '`!play <song name>` - Search & play\n' +
+                    '`!play <url>` - Play from URL\n' +
+                    '`!playmulti` - Add multiple songs at once\n' +
+                    '`!playfile` - Add songs from text file'
+                )]
+            });
         }
 
         try {
-            let player = kazagumo.players.get(message.guild.id);
+            const player = await getOrCreatePlayer(kazagumo, message);
 
-            if (!player) {
-                player = await kazagumo.createPlayer({
-                    guildId: message.guild.id,
-                    textId: message.channel.id,
-                    voiceId: message.member.voice.channel.id,
-                    volume: 70,
-                    deaf: true,
-                    shardId: message.guild.shardId
-                });
-            }
-
-            // ============ CRITICAL FIX: Properly handle URL vs Search ============
             let searchQuery;
-            
             if (isURL(query)) {
-                // If it's a URL, use it directly WITHOUT prefix
                 searchQuery = query;
                 console.log(`[PLAY] Loading URL: ${searchQuery}`);
             } else if (query.startsWith('ytsearch:') || query.startsWith('scsearch:') || query.startsWith('spsearch:')) {
-                // If already has search prefix, use as-is
                 searchQuery = query;
                 console.log(`[PLAY] Using prefixed search: ${searchQuery}`);
             } else {
-                // Regular search - add ytsearch: prefix
                 searchQuery = `ytsearch:${query}`;
                 console.log(`[PLAY] Searching: ${searchQuery}`);
             }
 
-            // Search/Load track
             const result = await kazagumo.search(searchQuery, { requester: message.author });
 
             console.log(`[PLAY] Result type: ${result?.type}, Tracks: ${result?.tracks?.length || 0}`);
 
             if (!result || !result.tracks || result.tracks.length === 0) {
-                return message.reply({ embeds: [errorEmbed('No results found! Try:\n• Different keywords\n• Full YouTube URL\n• Check if video is available')] });
+                return message.reply({ embeds: [errorEmbed('No results found! Try different keywords or a direct URL.')] });
             }
 
             if (result.type === 'PLAYLIST') {
@@ -267,7 +411,7 @@ client.on('messageCreate', async (message) => {
             } else {
                 const track = result.tracks[0];
                 player.queue.add(track);
-                
+
                 if (player.playing || player.paused) {
                     const embed = new EmbedBuilder()
                         .setColor(BOT_INFO.color)
@@ -277,7 +421,6 @@ client.on('messageCreate', async (message) => {
                 }
             }
 
-            // ============ CRITICAL FIX: Ensure player starts ============
             if (!player.playing && !player.paused) {
                 console.log('[PLAY] Starting playback...');
                 await player.play();
@@ -286,6 +429,230 @@ client.on('messageCreate', async (message) => {
         } catch (error) {
             console.error('[PLAY] Error:', error);
             message.reply({ embeds: [errorEmbed(`Error: ${error.message || 'Failed to play track'}`)] });
+        }
+    }
+
+    // ===========================================================
+    //  BARU: PLAY MULTI - Tambah banyak lagu sekaligus dengan |
+    // ===========================================================
+    if (command === 'playmulti' || command === 'pm') {
+        if (!message.member.voice.channel) {
+            return message.reply({ embeds: [errorEmbed('Join a voice channel first!')] });
+        }
+
+        const fullQuery = args.join(' ');
+        if (!fullQuery) {
+            return message.reply({
+                embeds: [errorEmbed(
+                    '**Usage:** `!playmulti <song1> | <song2> | <song3>`\n\n' +
+                    '**Example:**\n' +
+                    '```\n!pm Never Gonna Give You Up | Bohemian Rhapsody | Hotel California\n```\n' +
+                    '```\n!pm https://youtu.be/xxx | Imagine Dragons Believer | https://youtu.be/yyy\n```\n\n' +
+                    '💡 Pisahkan setiap lagu dengan tanda `|`\n' +
+                    '💡 Bisa campur URL dan nama lagu\n' +
+                    '💡 Maksimal 50 lagu sekaligus'
+                )]
+            });
+        }
+
+        // Split berdasarkan | (pipe)
+        const queries = fullQuery.split('|').map(q => q.trim()).filter(q => q.length > 0);
+
+        if (queries.length === 0) {
+            return message.reply({ embeds: [errorEmbed('No songs detected! Separate songs with `|`')] });
+        }
+
+        if (queries.length === 1) {
+            return message.reply({
+                embeds: [errorEmbed(
+                    'Only 1 song detected. Use `!play` for single songs.\n' +
+                    'For multiple songs, separate with `|`\n\n' +
+                    'Example: `!pm Song One | Song Two | Song Three`'
+                )]
+            });
+        }
+
+        if (queries.length > 50) {
+            return message.reply({ embeds: [errorEmbed('Maximum 50 songs at once! Please split into batches.')] });
+        }
+
+        try {
+            const player = await getOrCreatePlayer(kazagumo, message);
+
+            const result = await addMultipleTracks(
+                kazagumo, player, queries, message.author, message.channel
+            );
+
+            // Start playing jika belum
+            if (!player.playing && !player.paused && player.queue.length > 0) {
+                await player.play();
+            }
+
+        } catch (error) {
+            console.error('[PLAYMULTI] Error:', error);
+            message.reply({ embeds: [errorEmbed(`Error: ${error.message}`)] });
+        }
+    }
+
+    // ===========================================================
+    //  BARU: PLAY FILE - Tambah lagu dari file .txt yang diupload
+    // ===========================================================
+    if (command === 'playfile' || command === 'pf') {
+        if (!message.member.voice.channel) {
+            return message.reply({ embeds: [errorEmbed('Join a voice channel first!')] });
+        }
+
+        // Cek apakah ada attachment
+        const attachment = message.attachments.first();
+        if (!attachment) {
+            return message.reply({
+                embeds: [errorEmbed(
+                    '**Usage:** Upload a `.txt` file with the command `!playfile`\n\n' +
+                    '**File format** (one song per line):\n' +
+                    '```\nNever Gonna Give You Up\n' +
+                    'Bohemian Rhapsody\n' +
+                    'https://youtu.be/dQw4w9WgXcQ\n' +
+                    'Hotel California\n' +
+                    'Imagine Dragons Believer\n```\n\n' +
+                    '💡 Satu lagu per baris\n' +
+                    '💡 Bisa campur URL dan nama lagu\n' +
+                    '💡 Maksimal 100 lagu per file\n' +
+                    '💡 Baris kosong akan diabaikan'
+                )]
+            });
+        }
+
+        // Validasi file
+        if (!attachment.name.endsWith('.txt')) {
+            return message.reply({ embeds: [errorEmbed('Only `.txt` files are supported!')] });
+        }
+
+        if (attachment.size > 50000) { // 50KB limit
+            return message.reply({ embeds: [errorEmbed('File too large! Maximum 50KB.')] });
+        }
+
+        try {
+            // Download file content
+            const response = await fetch(attachment.url);
+            const text = await response.text();
+
+            // Parse baris per baris
+            const queries = text
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0 && !line.startsWith('#') && !line.startsWith('//')); // Ignore komentar
+
+            if (queries.length === 0) {
+                return message.reply({ embeds: [errorEmbed('File is empty or has no valid songs!')] });
+            }
+
+            if (queries.length > 100) {
+                return message.reply({
+                    embeds: [errorEmbed(
+                        `File contains **${queries.length}** songs. Maximum is **100**!\n` +
+                        'Please split into multiple files.'
+                    )]
+                });
+            }
+
+            const player = await getOrCreatePlayer(kazagumo, message);
+
+            message.channel.send({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor(BOT_INFO.color)
+                        .setDescription(
+                            `📄 File loaded: **${attachment.name}**\n` +
+                            `🎵 Songs found: **${queries.length}**\n` +
+                            `⏳ Starting to add to queue...`
+                        )
+                ]
+            });
+
+            const result = await addMultipleTracks(
+                kazagumo, player, queries, message.author, message.channel
+            );
+
+            if (!player.playing && !player.paused && player.queue.length > 0) {
+                await player.play();
+            }
+
+        } catch (error) {
+            console.error('[PLAYFILE] Error:', error);
+            message.reply({ embeds: [errorEmbed(`Error reading file: ${error.message}`)] });
+        }
+    }
+
+    // ===========================================================
+    //  BARU: PLAYLIST - Shortcut untuk URL playlist
+    // ===========================================================
+    if (command === 'playlist' || command === 'pl') {
+        if (!message.member.voice.channel) {
+            return message.reply({ embeds: [errorEmbed('Join a voice channel first!')] });
+        }
+
+        const query = args.join(' ');
+        if (!query) {
+            return message.reply({
+                embeds: [errorEmbed(
+                    '**Usage:** `!playlist <playlist URL>`\n\n' +
+                    '**Supported:**\n' +
+                    '• YouTube Playlist\n' +
+                    '• Spotify Playlist/Album\n' +
+                    '• SoundCloud Playlist\n\n' +
+                    '**Example:**\n' +
+                    '```\n!pl https://www.youtube.com/playlist?list=PLxxxxxxxx\n```'
+                )]
+            });
+        }
+
+        if (!isURL(query)) {
+            return message.reply({ embeds: [errorEmbed('Please provide a valid playlist URL!')] });
+        }
+
+        try {
+            const player = await getOrCreatePlayer(kazagumo, message);
+
+            const statusMsg = await message.channel.send({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor('#FFA500')
+                        .setDescription('⏳ Loading playlist... This may take a moment.')
+                ]
+            });
+
+            const result = await kazagumo.search(query, { requester: message.author });
+
+            if (!result || !result.tracks || result.tracks.length === 0) {
+                return statusMsg.edit({ embeds: [errorEmbed('Playlist not found or empty!')] });
+            }
+
+            let addedCount = 0;
+            for (const track of result.tracks) {
+                player.queue.add(track);
+                addedCount++;
+            }
+
+            const embed = new EmbedBuilder()
+                .setColor(BOT_INFO.color)
+                .setAuthor({ name: 'Playlist Loaded', iconURL: client.user.displayAvatarURL() })
+                .setDescription(
+                    `📃 **${result.playlistName || 'Playlist'}**\n\n` +
+                    `✅ Added **${addedCount}** tracks to queue\n` +
+                    `📊 Total in queue: **${player.queue.length}** tracks`
+                )
+                .setFooter({ text: `Requested by ${message.author.tag}` })
+                .setTimestamp();
+
+            await statusMsg.edit({ embeds: [embed] });
+
+            if (!player.playing && !player.paused) {
+                await player.play();
+            }
+
+        } catch (error) {
+            console.error('[PLAYLIST] Error:', error);
+            message.reply({ embeds: [errorEmbed(`Error: ${error.message}`)] });
         }
     }
 
@@ -333,21 +700,42 @@ client.on('messageCreate', async (message) => {
         const current = player.queue.current;
         const queue = player.queue;
 
+        // Pagination support
+        const page = parseInt(args[0]) || 1;
+        const itemsPerPage = 10;
+        const totalPages = Math.ceil(queue.length / itemsPerPage) || 1;
+        const currentPage = Math.min(page, totalPages);
+
         let description = `**Now Playing:**\n[${current.title}](${current.uri}) • \`${formatDuration(current.length)}\`\n\n`;
 
         if (queue.length > 0) {
             description += `**Up Next:**\n`;
-            queue.slice(0, 10).forEach((track, i) => {
+            const start = (currentPage - 1) * itemsPerPage;
+            const end = Math.min(start + itemsPerPage, queue.length);
+
+            for (let i = start; i < end; i++) {
+                const track = queue[i];
                 description += `\`${i + 1}.\` [${track.title}](${track.uri}) • \`${formatDuration(track.length)}\`\n`;
-            });
-            if (queue.length > 10) description += `\n*...and ${queue.length - 10} more*`;
+            }
+
+            if (totalPages > 1) {
+                description += `\n📄 Page **${currentPage}/${totalPages}** • Use \`!queue <page>\``;
+            }
+        }
+
+        // Hitung total durasi
+        let totalDuration = current.length || 0;
+        for (const track of queue) {
+            totalDuration += track.length || 0;
         }
 
         const embed = new EmbedBuilder()
             .setColor(BOT_INFO.color)
             .setAuthor({ name: `Queue • ${message.guild.name}`, iconURL: message.guild.iconURL() })
             .setDescription(description)
-            .setFooter({ text: `${queue.length + 1} tracks • Volume: ${player.volume}%` });
+            .setFooter({
+                text: `${queue.length + 1} tracks • Total: ${formatDuration(totalDuration)} • Volume: ${player.volume}%`
+            });
 
         message.channel.send({ embeds: [embed] });
     }
@@ -376,7 +764,7 @@ client.on('messageCreate', async (message) => {
                 { name: 'Volume', value: `${player.volume}%`, inline: true }
             )
             .setDescription(`\`${formatDuration(position)}\` ${bar} \`${formatDuration(duration)}\``)
-            .setFooter({ text: `Loop: ${player.loop || 'Off'}` });
+            .setFooter({ text: `Loop: ${player.loop || 'Off'} • Queue: ${player.queue.length} tracks` });
 
         message.channel.send({ embeds: [embed] });
     }
@@ -392,7 +780,7 @@ client.on('messageCreate', async (message) => {
         }
 
         player.setLoop(mode === 'off' ? 'none' : mode);
-        
+
         const icons = { track: '🔂', queue: '🔁', off: '➡️' };
         message.channel.send({ embeds: [successEmbed(`${icons[mode]} Loop: **${mode.charAt(0).toUpperCase() + mode.slice(1)}**`)] });
     }
@@ -457,7 +845,66 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // ==================== HELP ====================
+    // ===========================================================
+    //  BARU: REMOVE - Hapus track dari queue
+    // ===========================================================
+    if (command === 'remove' || command === 'rm') {
+        const player = kazagumo.players.get(message.guild.id);
+        if (!player) return message.reply({ embeds: [errorEmbed('Nothing is playing!')] });
+
+        const index = parseInt(args[0]);
+        if (!args[0] || isNaN(index)) {
+            return message.reply({ embeds: [errorEmbed('Usage: `!remove <number>`\nUse `!queue` to see track numbers.')] });
+        }
+
+        if (index < 1 || index > player.queue.length) {
+            return message.reply({ embeds: [errorEmbed(`Invalid number! Queue has **${player.queue.length}** tracks.`)] });
+        }
+
+        const removed = player.queue.splice(index - 1, 1);
+        if (removed && removed[0]) {
+            message.channel.send({
+                embeds: [successEmbed(`🗑️ Removed: **${removed[0].title}**`)]
+            });
+        }
+    }
+
+    // ===========================================================
+    //  BARU: CLEAR - Hapus seluruh queue (kecuali yang playing)
+    // ===========================================================
+    if (command === 'clear') {
+        const player = kazagumo.players.get(message.guild.id);
+        if (!player) return message.reply({ embeds: [errorEmbed('Nothing is playing!')] });
+
+        const count = player.queue.length;
+        if (count === 0) {
+            return message.reply({ embeds: [errorEmbed('Queue is already empty!')] });
+        }
+
+        player.queue.clear();
+        message.channel.send({
+            embeds: [successEmbed(`🗑️ Cleared **${count}** tracks from queue.`)]
+        });
+    }
+
+    // ===========================================================
+    //  BARU: SHUFFLE - Acak urutan queue
+    // ===========================================================
+    if (command === 'shuffle') {
+        const player = kazagumo.players.get(message.guild.id);
+        if (!player) return message.reply({ embeds: [errorEmbed('Nothing is playing!')] });
+
+        if (player.queue.length < 2) {
+            return message.reply({ embeds: [errorEmbed('Need at least 2 songs in queue to shuffle!')] });
+        }
+
+        player.queue.shuffle();
+        message.channel.send({
+            embeds: [successEmbed(`🔀 Shuffled **${player.queue.length}** tracks in queue!`)]
+        });
+    }
+
+    // ==================== HELP (UPDATED) ====================
     if (command === 'help') {
         const embed = new EmbedBuilder()
             .setColor(BOT_INFO.color)
@@ -466,22 +913,52 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 {
                     name: '🎵 Music',
-                    value: '```\n!play <song>  - Play a song\n!skip         - Skip current\n!stop         - Stop & leave\n!pause        - Pause\n!resume       - Resume\n```',
+                    value: '```\n' +
+                        '!play <song>      - Play a song\n' +
+                        '!playmulti        - Add many songs at once\n' +
+                        '!playfile         - Add songs from .txt file\n' +
+                        '!playlist <url>   - Load playlist URL\n' +
+                        '!skip             - Skip current\n' +
+                        '!stop             - Stop & leave\n' +
+                        '!pause            - Pause\n' +
+                        '!resume           - Resume\n' +
+                        '```',
                     inline: false
                 },
                 {
-                    name: '📋 Queue',
-                    value: '```\n!queue        - View queue\n!nowplaying   - Current song\n!loop <mode>  - track/queue/off\n```',
+                    name: '📋 Queue Management',
+                    value: '```\n' +
+                        '!queue [page]     - View queue\n' +
+                        '!nowplaying       - Current song\n' +
+                        '!loop <mode>      - track/queue/off\n' +
+                        '!remove <number>  - Remove from queue\n' +
+                        '!clear            - Clear entire queue\n' +
+                        '!shuffle          - Shuffle queue\n' +
+                        '```',
                     inline: false
                 },
                 {
                     name: '🎛️ Control',
-                    value: '```\n!volume <0-100> - Set volume\n!seek <1:30>    - Seek to time\n!8d             - Toggle 8D\n```',
+                    value: '```\n' +
+                        '!volume <0-100>   - Set volume\n' +
+                        '!seek <1:30>      - Seek to time\n' +
+                        '!8d               - Toggle 8D audio\n' +
+                        '```',
+                    inline: false
+                },
+                {
+                    name: '📦 Bulk Add Examples',
+                    value:
+                        '**Multi (with pipe `|`):**\n' +
+                        '`!pm Song One | Song Two | Song Three`\n\n' +
+                        '**From file:**\n' +
+                        'Upload `.txt` file with `!pf` command\n' +
+                        '(one song per line)',
                     inline: false
                 },
                 {
                     name: 'ℹ️ Info',
-                    value: '```\n!info         - Bot info\n!ping         - Check ping\n```',
+                    value: '```\n!info  - Bot info\n!ping  - Check ping\n```',
                     inline: false
                 }
             )
@@ -518,11 +995,16 @@ client.on('messageCreate', async (message) => {
     // ==================== PING ====================
     if (command === 'ping') {
         const latency = Date.now() - message.createdTimestamp;
-        const node = kazagumo.shoukaku.nodes.get('Render');
-        
+        const node = kazagumo.shoukaku.nodes.get('Serenetia');
+
         const embed = new EmbedBuilder()
             .setColor(BOT_INFO.color)
-            .setDescription(`🏓 **Pong!**\n📡 Bot Latency: \`${latency}ms\`\n💓 API: \`${Math.round(client.ws.ping)}ms\`\n🎵 Lavalink: \`${node?.stats?.ping || 'N/A'}ms\``);
+            .setDescription(
+                `🏓 **Pong!**\n` +
+                `📡 Bot Latency: \`${latency}ms\`\n` +
+                `💓 API: \`${Math.round(client.ws.ping)}ms\`\n` +
+                `🎵 Lavalink: \`${node?.stats?.ping || 'N/A'}ms\``
+            );
 
         message.channel.send({ embeds: [embed] });
     }
