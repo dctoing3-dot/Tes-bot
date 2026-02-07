@@ -433,66 +433,90 @@ client.on('messageCreate', async (message) => {
     }
 
     // ===========================================================
-    //  BARU: PLAY MULTI - Tambah banyak lagu sekaligus dengan |
-    // ===========================================================
-    if (command === 'playmulti' || command === 'pm') {
-        if (!message.member.voice.channel) {
-            return message.reply({ embeds: [errorEmbed('Join a voice channel first!')] });
-        }
-
-        const fullQuery = args.join(' ');
-        if (!fullQuery) {
-            return message.reply({
-                embeds: [errorEmbed(
-                    '**Usage:** `!playmulti <song1> | <song2> | <song3>`\n\n' +
-                    '**Example:**\n' +
-                    '```\n!pm Never Gonna Give You Up | Bohemian Rhapsody | Hotel California\n```\n' +
-                    '```\n!pm https://youtu.be/xxx | Imagine Dragons Believer | https://youtu.be/yyy\n```\n\n' +
-                    '💡 Pisahkan setiap lagu dengan tanda `|`\n' +
-                    '💡 Bisa campur URL dan nama lagu\n' +
-                    '💡 Maksimal 50 lagu sekaligus'
-                )]
-            });
-        }
-
-        // Split berdasarkan | (pipe)
-        const queries = fullQuery.split('|').map(q => q.trim()).filter(q => q.length > 0);
-
-        if (queries.length === 0) {
-            return message.reply({ embeds: [errorEmbed('No songs detected! Separate songs with `|`')] });
-        }
-
-        if (queries.length === 1) {
-            return message.reply({
-                embeds: [errorEmbed(
-                    'Only 1 song detected. Use `!play` for single songs.\n' +
-                    'For multiple songs, separate with `|`\n\n' +
-                    'Example: `!pm Song One | Song Two | Song Three`'
-                )]
-            });
-        }
-
-        if (queries.length > 50) {
-            return message.reply({ embeds: [errorEmbed('Maximum 50 songs at once! Please split into batches.')] });
-        }
-
-        try {
-            const player = await getOrCreatePlayer(kazagumo, message);
-
-            const result = await addMultipleTracks(
-                kazagumo, player, queries, message.author, message.channel
-            );
-
-            // Start playing jika belum
-            if (!player.playing && !player.paused && player.queue.length > 0) {
-                await player.play();
-            }
-
-        } catch (error) {
-            console.error('[PLAYMULTI] Error:', error);
-            message.reply({ embeds: [errorEmbed(`Error: ${error.message}`)] });
-        }
+//  PLAY MULTI - Tambah banyak lagu sekaligus
+//  Separator: koma (,) atau titik koma (;) atau pipe (|)
+// ===========================================================
+if (command === 'playmulti' || command === 'pm') {
+    if (!message.member.voice.channel) {
+        return message.reply({ embeds: [errorEmbed('Join a voice channel first!')] });
     }
+
+    const fullQuery = args.join(' ');
+    if (!fullQuery) {
+        return message.reply({
+            embeds: [errorEmbed(
+                '**Usage:** `!pm <song1>, <song2>, <song3>`\n\n' +
+                '**Separator yang didukung:** `,` atau `;` atau `|`\n\n' +
+                '**Contoh:**\n' +
+                '```\n!pm Never Gonna Give You Up, Bohemian Rhapsody, Hotel California\n```\n' +
+                '```\n!pm https://youtu.be/xxx, Believer, https://youtu.be/yyy\n```\n\n' +
+                '💡 Pisahkan setiap lagu dengan tanda `,`\n' +
+                '💡 Bisa campur URL dan nama lagu\n' +
+                '💡 Maksimal 50 lagu sekaligus'
+            )]
+        });
+    }
+
+    // ============ SMART SEPARATOR DETECTION ============
+    // Prioritas: koma (,) > titik koma (;) > pipe (|)
+    // Otomatis deteksi separator mana yang dipakai user
+    let separator;
+    if (fullQuery.includes(',')) {
+        separator = ',';
+    } else if (fullQuery.includes(';')) {
+        separator = ';';
+    } else if (fullQuery.includes('|')) {
+        separator = '|';
+    } else {
+        // Tidak ada separator = cuma 1 lagu
+        return message.reply({
+            embeds: [errorEmbed(
+                'Only 1 song detected. Use `!play` for single songs.\n\n' +
+                'For multiple songs, separate with `,`\n' +
+                'Example: `!pm Song One, Song Two, Song Three`'
+            )]
+        });
+    }
+
+    // Split dan bersihkan
+    const queries = fullQuery
+        .split(separator)
+        .map(q => q.trim())
+        .filter(q => q.length > 0);
+
+    if (queries.length === 0) {
+        return message.reply({ embeds: [errorEmbed('No songs detected!')] });
+    }
+
+    if (queries.length === 1) {
+        return message.reply({
+            embeds: [errorEmbed(
+                'Only 1 song detected. Use `!play` for single songs.\n' +
+                'Example: `!pm Song One, Song Two, Song Three`'
+            )]
+        });
+    }
+
+    if (queries.length > 50) {
+        return message.reply({ embeds: [errorEmbed('Maximum 50 songs at once! Please split into batches.')] });
+    }
+
+    try {
+        const player = await getOrCreatePlayer(kazagumo, message);
+
+        const result = await addMultipleTracks(
+            kazagumo, player, queries, message.author, message.channel
+        );
+
+        if (!player.playing && !player.paused && player.queue.length > 0) {
+            await player.play();
+        }
+
+    } catch (error) {
+        console.error('[PLAYMULTI] Error:', error);
+        message.reply({ embeds: [errorEmbed(`Error: ${error.message}`)] });
+    }
+}
 
     // ===========================================================
     //  BARU: PLAY FILE - Tambah lagu dari file .txt yang diupload
