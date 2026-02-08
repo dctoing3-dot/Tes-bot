@@ -35,12 +35,17 @@ app.get('/',(req,res)=>res.status(200).send('Bot is running'));
 app.get('/health',(req,res)=>res.status(200).json({status:'ok',uptime:process.uptime(),redis:redis.status}));
 app.listen(PORT,()=>console.log(`🌐 Server running on port ${PORT}`));
 const client=new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildVoiceStates,GatewayIntentBits.GuildMessages,GatewayIntentBits.MessageContent]});
-const Nodes=[{name:'Serenetia',url:'lavalinkv3.serenetia.com:443',auth:'https://dsc.gg/ajidevserver',secure:true}];
-const kazagumo=new Kazagumo({defaultSearchEngine:'youtube',send:(guildId,payload)=>{const guild=client.guilds.cache.get(guildId);if(guild)guild.shard.send(payload);}},new Connectors.DiscordJS(client),Nodes,{moveOnDisconnect:false,resumable:false,reconnectTries:3,restTimeout:15000});
+const Nodes=[
+{name:'TechByte-V4',url:'lavahatry4.techbyte.host:3000',auth:'naig.is-a.dev',secure:false},
+{name:'Millohost-V3',url:'lava-v3.millohost.my.id:443',auth:'https://discord.gg/mjS5J2K3ep',secure:true},
+{name:'Serenetia-V3',url:'lavalinkv3.serenetia.com:443',auth:'https://dsc.gg/ajidevserver',secure:true}
+];
+const kazagumo=new Kazagumo({defaultSearchEngine:'youtube',send:(guildId,payload)=>{const guild=client.guilds.cache.get(guildId);if(guild)guild.shard.send(payload);}},new Connectors.DiscordJS(client),Nodes,{moveOnDisconnect:true,resumable:true,resumableTimeout:60,reconnectTries:5,reconnectInterval:5,restTimeout:30000});
 kazagumo.shoukaku.on('ready',(name)=>console.log(`✅ Lavalink ${name} connected!`));
 kazagumo.shoukaku.on('error',(name,error)=>console.error(`❌ Lavalink ${name} error:`,error.message));
 kazagumo.shoukaku.on('close',(name,code,reason)=>console.warn(`⚠️ Lavalink ${name} closed: ${code} - ${reason}`));
 kazagumo.shoukaku.on('disconnect',(name)=>console.warn(`🔌 Lavalink ${name} disconnected`));
+kazagumo.shoukaku.on('reconnecting',(name,left)=>console.log(`🔄 Lavalink ${name} reconnecting... (${left} left)`));
 const disconnectTimers=new Map();
 kazagumo.on('playerStart',async(player,track)=>{
 if(disconnectTimers.has(player.guildId)){clearTimeout(disconnectTimers.get(player.guildId));disconnectTimers.delete(player.guildId);}
