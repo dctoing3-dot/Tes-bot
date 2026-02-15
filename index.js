@@ -35,12 +35,7 @@ app.get('/',(req,res)=>res.status(200).send('Bot is running'));
 app.get('/health',(req,res)=>res.status(200).json({status:'ok',uptime:process.uptime(),redis:redis.status}));
 app.listen(PORT,()=>console.log(`🌐 Server running on port ${PORT}`));
 const client=new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildVoiceStates,GatewayIntentBits.GuildMessages,GatewayIntentBits.MessageContent]});
-const Nodes = [{
-  name: 'MyLavalink',
-  url: '72.61.214.233:2333',
-  auth: 'GantiPasswordIni123!@#',
-  secure: false
-}];
+const Nodes=[{name:'Serenetia',url:'lavalinkv4.serenetia.com:443',auth:'https://dsc.gg/ajidevserver',secure:true}];
 const kazagumo=new Kazagumo({defaultSearchEngine:'youtube',send:(guildId,payload)=>{const guild=client.guilds.cache.get(guildId);if(guild)guild.shard.send(payload);}},new Connectors.DiscordJS(client),Nodes,{moveOnDisconnect:false,resumable:false,reconnectTries:3,restTimeout:15000});
 kazagumo.shoukaku.on('ready',(name)=>console.log(`✅ Lavalink ${name} connected!`));
 kazagumo.shoukaku.on('error',(name,error)=>console.error(`❌ Lavalink ${name} error:`,error.message));
